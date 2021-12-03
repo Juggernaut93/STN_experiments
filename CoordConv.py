@@ -53,7 +53,7 @@ class AddCoordsTh(nn.Module):
         ret = torch.cat([input_tensor, xx_channel, yy_channel], dim=1)
 
         if self.with_r:
-            rr = torch.sqrt(torch.pow(xx_channel - 0.5, 2) + torch.pow(yy_channel - 0.5, 2))
+            rr = torch.sqrt(torch.pow(xx_channel, 2) + torch.pow(yy_channel, 2))
             ret = torch.cat([ret, rr], dim=1)
 
         return ret
@@ -106,7 +106,7 @@ class AddCoords(nn.Module):
             yy_channel.type_as(input_tensor)], dim=1)
 
         if self.with_r:
-            rr = torch.sqrt(torch.pow(xx_channel.type_as(input_tensor) - 0.5, 2) + torch.pow(yy_channel.type_as(input_tensor) - 0.5, 2))
+            rr = torch.sqrt(torch.pow(xx_channel.type_as(input_tensor), 2) + torch.pow(yy_channel.type_as(input_tensor), 2))
             ret = torch.cat([ret, rr], dim=1)
 
         return ret
