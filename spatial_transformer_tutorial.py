@@ -36,19 +36,7 @@ import torchvision
 from torchvision import datasets, transforms
 import matplotlib.pyplot as plt
 import numpy as np
-
-######################################################################
-# Loading the data
-# ----------------
-#
-# In this post we experiment with the classic MNIST dataset. Using a
-# standard convolutional network augmented with a spatial transformer
-# network.
-
 from six.moves import urllib
-opener = urllib.request.build_opener()
-opener.addheaders = [('User-agent', 'Mozilla/5.0')]
-urllib.request.install_opener(opener)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -67,14 +55,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # -  The sampler uses the parameters of the transformation and applies
 #    it to the input image.
 #
-# .. figure:: /_static/img/stn/stn-arch.png
-#
 # .. Note::
 #    We need the latest version of PyTorch that contains
 #    affine_grid and grid_sample modules.
 #
-
-
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
@@ -112,8 +96,8 @@ class Net(nn.Module):
         theta = self.fc_loc(xs)
         theta = theta.view(-1, 2, 3)
 
-        grid = F.affine_grid(theta, x.size())
-        x = F.grid_sample(x, grid)
+        grid = F.affine_grid(theta, x.size(), align_corners=False)
+        x = F.grid_sample(x, grid, align_corners=False)
 
         return x
 
@@ -131,8 +115,6 @@ class Net(nn.Module):
         return F.log_softmax(x, dim=1)
 
 
-model = Net().to(device)
-
 ######################################################################
 # Training the model
 # ------------------
@@ -140,12 +122,7 @@ model = Net().to(device)
 # Now, let's use the SGD algorithm to train the model. The network is
 # learning the classification task in a supervised way. In the same time
 # the model is learning STN automatically in an end-to-end fashion.
-
-
-optimizer = optim.SGD(model.parameters(), lr=0.01)
-
-
-def train(epoch):
+def train(epoch, model, optimizer, train_loader):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -159,12 +136,11 @@ def train(epoch):
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.item()))
+
 #
 # A simple test procedure to measure the STN performances on MNIST.
 #
-
-
-def test():
+def test(model, optimizer, test_loader):
     with torch.no_grad():
         model.eval()
         test_loss = 0
@@ -174,7 +150,7 @@ def test():
             output = model(data)
 
             # sum up batch loss
-            test_loss += F.nll_loss(output, target, size_average=False).item()
+            test_loss += F.nll_loss(output, target, reduction='sum').item()
             # get the index of the max log-probability
             pred = output.max(1, keepdim=True)[1]
             correct += pred.eq(target.view_as(pred)).sum().item()
@@ -193,8 +169,6 @@ def test():
 #
 # We define a small helper function in order to visualize the
 # transformations while training.
-
-
 def convert_image_np(inp):
     """Convert a Tensor to numpy image."""
     inp = inp.numpy().transpose((1, 2, 0))
@@ -207,9 +181,7 @@ def convert_image_np(inp):
 # We want to visualize the output of the spatial transformers layer
 # after the training, we visualize a batch of input images and
 # the corresponding transformed batch using STN.
-
-
-def visualize_stn():
+def visualize_stn(model, test_loader):
     with torch.no_grad():
         # Get a batch of training data
         data = next(iter(test_loader))[0].to(device)
@@ -231,8 +203,19 @@ def visualize_stn():
         axarr[1].imshow(out_grid)
         axarr[1].set_title('Transformed Images')
 
-if __name__ == "__main__":
+def main():
     plt.ion()   # interactive mode
+
+    ######################################################################
+    # Loading the data
+    # ----------------
+    #
+    # In this post we experiment with the classic MNIST dataset. Using a
+    # standard convolutional network augmented with a spatial transformer
+    # network.
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+    urllib.request.install_opener(opener)
 
     # Training dataset
     train_loader = torch.utils.data.DataLoader(
@@ -241,6 +224,7 @@ if __name__ == "__main__":
                            transforms.ToTensor(),
                            transforms.Normalize((0.1307,), (0.3081,))
                        ])), batch_size=64, shuffle=True, num_workers=4)
+    
     # Test dataset
     test_loader = torch.utils.data.DataLoader(
         datasets.MNIST(root='.', train=False, transform=transforms.Compose([
@@ -248,12 +232,18 @@ if __name__ == "__main__":
             transforms.Normalize((0.1307,), (0.3081,))
         ])), batch_size=64, shuffle=True, num_workers=4)
 
+    model = Net().to(device)
+    optimizer = optim.SGD(model.parameters(), lr=0.01)
+
     for epoch in range(1, 20 + 1):
-        train(epoch)
-        test()
+        train(epoch, model, optimizer, train_loader)
+        test(model, optimizer, test_loader)
 
     # Visualize the STN transformation on some input batch
-    visualize_stn()
+    visualize_stn(model, test_loader)
 
     plt.ioff()
     plt.show()
+
+if __name__ == "__main__":
+    main()
