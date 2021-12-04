@@ -16,6 +16,7 @@ import numpy as np
 from six.moves import urllib
 from CoordConv import CoordConv
 import random
+import argparse
 
 # Reproducibility, see https://pytorch.org/docs/stable/notes/randomness.html
 torch.manual_seed(0)
@@ -224,13 +225,14 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None,
         # in order to select the best training hyperparameters
         # (e.g. optimizer, number of epochs, etc.)
         # but we won't bother for this toy project
+        # also: my GPU would take an eternity to train the models
         for epoch in range(1, epochs + 1):
             train(epoch, model, optimizer, train_loader)
             _, accuracy = test(model, test_loader)
         acc_list.append(accuracy) # save last epoch accuracy
         models.append(model)
         
-    print("Average accuracy over 5 runs: {:.4f} +/- {:.4f}".format(np.mean(acc_list), np.std(acc_list)))
+    print("Average accuracy over {} runs: {:.4f} +/- {:.4f}".format(num_runs, np.mean(acc_list), np.std(acc_list) if num_runs > 1 else 0))
     
     return models, acc_list
 
@@ -246,7 +248,7 @@ def convert_image_np(inp):
 # We want to visualize the output of the spatial transformers layer
 # after the training, we visualize a batch of input images and
 # the corresponding transformed batch using STN.
-def visualize_stn(model, test_loader):
+def visualize_stn(models, model_names, test_loader):
     """
     Visualize the output of the STN layer using a batch of images.
     The function will select the next batch of images from the
@@ -254,31 +256,35 @@ def visualize_stn(model, test_loader):
     
     Parameters
     ----------
-    model : nn.Module
-        The network to evaluate.
+    models : list of nn.Module
+        The networks to evaluate.
+    model_names: str
+        Name of the models to use as graph titles.
     test_loader : torch.utils.data.DataLoader
         A DataLoader providing access to test images and labels.
     """
-    with torch.no_grad():
-        # Get a batch of training data
-        data = next(iter(test_loader))[0].to(device)
+    # Get a batch of training data
+    # use the same images for all the models
+    data = next(iter(test_loader))[0].to(device)
+    input_tensor = data.cpu()
+    
+    for model, model_name in zip(models, model_names):
+        with torch.no_grad():
+            transformed_input_tensor = model.stn(data).cpu()
 
-        input_tensor = data.cpu()
-        transformed_input_tensor = model.stn(data).cpu()
+            in_grid = convert_image_np(
+                torchvision.utils.make_grid(input_tensor))
 
-        in_grid = convert_image_np(
-            torchvision.utils.make_grid(input_tensor))
+            out_grid = convert_image_np(
+                torchvision.utils.make_grid(transformed_input_tensor))
 
-        out_grid = convert_image_np(
-            torchvision.utils.make_grid(transformed_input_tensor))
+            # Plot the results side-by-side
+            f, axarr = plt.subplots(1, 2)
+            axarr[0].imshow(in_grid)
+            axarr[0].set_title('Input Images')
 
-        # Plot the results side-by-side
-        f, axarr = plt.subplots(1, 2)
-        axarr[0].imshow(in_grid)
-        axarr[0].set_title('Dataset Images')
-
-        axarr[1].imshow(out_grid)
-        axarr[1].set_title('Transformed Images')
+            axarr[1].imshow(out_grid)
+            axarr[1].set_title('Transformed Images (model {})'.format(model_name))
 
 # Reproducible DataLoader worker initialization function
 # see https://pytorch.org/docs/stable/notes/randomness.html
@@ -288,6 +294,17 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
 
 def main():
+    parser = argparse.ArgumentParser(description='Train and evaluate STN-based models.')
+    parser.add_argument('--distort', action='store_true',
+                        help='Apply random Affine transformations to MNIST images.')
+    #parser.add_argument('-coord', choices=['no', 'stn', 'all'], default='no',
+    #                    help="Use CoordConv instead of Conv. 'no' = no CoordConv. 'stn' = use CoordConv in the STN module only. 'all' = use CoordConv in the entire network.")
+    parser.add_argument('-nruns', type=int, default=5,
+                        help="Number of models to train. Average accuracy will be computed. Default 5.")
+    parser.add_argument('-epochs', type=int, default=20,
+                        help="Number of epochs per run. Default 20.")
+    args = parser.parse_args()
+
     plt.ion()   # interactive mode
 
     # We experiment with the classic MNIST dataset. Using a standard
@@ -299,13 +316,21 @@ def main():
     g = torch.Generator()
     g.manual_seed(0)
     
+    data_transforms = transforms.Compose([
+                           transforms.ToTensor(),
+                           transforms.Normalize((0.1307,), (0.3081,))
+                       ])
+    if args.distort:
+        # random affine transformation
+        # we want to evaluate the network on distorted images
+        # since that is where the STN shines
+        random_affine = transforms.RandomAffine(degrees=45, translate=(0.2,0.2), scale=(0.85,1.15), shear=15)
+        data_transforms = transforms.Compose([data_transforms, random_affine])
+    
     # Training dataset
     train_loader = torch.utils.data.DataLoader(
         datasets.MNIST(root='.', train=True, download=True,
-                       transform=transforms.Compose([
-                           transforms.ToTensor(),
-                           transforms.Normalize((0.1307,), (0.3081,))
-                       ])),
+                       transform=data_transforms),
         batch_size=64, shuffle=True, num_workers=4,
         worker_init_fn=seed_worker, generator=g)
     
@@ -315,10 +340,7 @@ def main():
     # We use it instead in order to extract the same sample images for
     # STN visualization.
     test_loader = torch.utils.data.DataLoader(
-        datasets.MNIST(root='.', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])),
+        datasets.MNIST(root='.', train=False, transform=data_transforms),
         batch_size=64, shuffle=True, num_workers=4,
         worker_init_fn=seed_worker, generator=g)
 
@@ -334,17 +356,16 @@ def main():
     # average.
     models = {}
     accuracies = {}
-    models['baseline'],   accuracies['baseline']   = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord=None, use_radius=False)
-    models['stn'],        accuracies['stn']        = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='stn', use_radius=False)
-    models['stn_radius'], accuracies['stn_radius'] = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='stn', use_radius=True)
-    models['all'],        accuracies['all']        = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='all', use_radius=False)
-    models['all_radius'], accuracies['all_radius'] = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='all', use_radius=True)
+    models['baseline'],        accuracies['baseline']        = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord=None, use_radius=False)
+    models['stncoord'],        accuracies['stncoord']        = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='stn', use_radius=False)
+    models['stncoord_radius'], accuracies['stncoord_radius'] = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='stn', use_radius=True)
+    models['allcoord'],        accuracies['allcoord']        = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='all', use_radius=False)
+    models['allcoord_radius'], accuracies['allcoord_radius'] = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='all', use_radius=True)
     
     # Visualize the STN transformation on some input batch
-    # Use the first trained model
-    for model_type, models in models.items():
-        print("Visualizing transformation for one of the '{}' models.".format(model_type))
-        visualize_stn(models[0], test_loader)
+    # Use the first trained model for each model type
+    print("Visualizing transformations.")
+    visualize_stn([mlist[0] for mlist in models.values()], [mtype for mtype in models.keys()], test_loader)
     
     best_acc = 0
     best_model = None
