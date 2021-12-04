@@ -1,31 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Spatial Transformer Networks Tutorial
-=====================================
-**Author**: `Ghassen HAMROUNI <https://github.com/GHamrouni>`_
-
-.. figure:: /_static/img/stn/FSeq.png
-
-In this tutorial, you will learn how to augment your network using
-a visual attention mechanism called spatial transformer
-networks. You can read more about the spatial transformer
-networks in the `DeepMind paper <https://arxiv.org/abs/1506.02025>`__
-
-Spatial transformer networks are a generalization of differentiable
-attention to any spatial transformation. Spatial transformer networks
-(STN for short) allow a neural network to learn how to perform spatial
-transformations on the input image in order to enhance the geometric
-invariance of the model.
-For example, it can crop a region of interest, scale and correct
-the orientation of an image. It can be a useful mechanism because CNNs
-are not invariant to rotation and scale and more general affine
-transformations.
-
-One of the best things about STN is the ability to simply plug it into
-any existing CNN with very little modification.
+Based on the "Spatial Transformer Networks Tutorial"
+by Ghassen HAMROUNI <https://github.com/GHamrouni>
 """
-# License: BSD
-# Author: Ghassen Hamrouni
 
 from __future__ import print_function
 import torch
@@ -37,43 +14,58 @@ from torchvision import datasets, transforms
 import matplotlib.pyplot as plt
 import numpy as np
 from six.moves import urllib
+from CoordConv import CoordConv
+import random
 
+# Reproducibility, see https://pytorch.org/docs/stable/notes/randomness.html
+torch.manual_seed(0)
+random.seed(0)
+np.random.seed(0)
+torch.backends.cudnn.benchmark = False
+# We can't enable this option because the grid_sampler_2d_backward_cuda
+# function, used to propagate the gradients for the grid_sample
+# operation, does not have a deterministic implementation in pyTorch
+#torch.use_deterministic_algorithms(True)
+
+# Device selection, prefer GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-######################################################################
-# Depicting spatial transformer networks
-# --------------------------------------
-#
-# Spatial transformer networks boils down to three main components :
-#
-# -  The localization network is a regular CNN which regresses the
-#    transformation parameters. The transformation is never learned
-#    explicitly from this dataset, instead the network learns automatically
-#    the spatial transformations that enhances the global accuracy.
-# -  The grid generator generates a grid of coordinates in the input
-#    image corresponding to each pixel from the output image.
-# -  The sampler uses the parameters of the transformation and applies
-#    it to the input image.
-#
-# .. Note::
-#    We need the latest version of PyTorch that contains
-#    affine_grid and grid_sample modules.
-#
 class Net(nn.Module):
-    def __init__(self):
+    def __init__(self, use_coord=None):
+        """
+        Parameters
+        ----------
+        use_coord : str, optional
+            Whether CoordConv should replace Conv (default is None).
+            'stn' indicates that only the STN module should use CoordConv.
+            'all' indicates that all Conv modules should be replaced.
+        
+        Raises
+        ------
+        ValueError
+            If use_coord argument value is invalid.
+        """
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+        
+        if use_coord not in (None, 'stn', 'all'):
+            raise ValueError("use_coord must be either None, 'stn' or 'all'")
+        
+        main_conv = CoordConv if use_coord == 'all' else nn.Conv2d # use CoordConv outside of STN only if use_coord is 'all'
+        stn_conv = CoordConv if use_coord is not None else nn.Conv2d # use CoordConv in STN if use_coord is 'stn' or 'all'
+        
+        self.conv1 = main_conv(1, 10, kernel_size=5)
+        self.conv2 = main_conv(10, 20, kernel_size=5)
+        
         self.conv2_drop = nn.Dropout2d()
         self.fc1 = nn.Linear(320, 50)
         self.fc2 = nn.Linear(50, 10)
 
         # Spatial transformer localization-network
         self.localization = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=7),
+            stn_conv(1, 8, kernel_size=7),
             nn.MaxPool2d(2, stride=2),
             nn.ReLU(True),
-            nn.Conv2d(8, 10, kernel_size=5),
+            stn_conv(8, 10, kernel_size=5),
             nn.MaxPool2d(2, stride=2),
             nn.ReLU(True)
         )
@@ -114,15 +106,21 @@ class Net(nn.Module):
         x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
-
-######################################################################
-# Training the model
-# ------------------
-#
-# Now, let's use the SGD algorithm to train the model. The network is
-# learning the classification task in a supervised way. In the same time
-# the model is learning STN automatically in an end-to-end fashion.
 def train(epoch, model, optimizer, train_loader):
+    """
+    Perform a training epoch on the provided model.
+    
+    Parameters
+    ----------
+    epoch: int
+        The number of the current epoch.
+    model : nn.Module
+        The network to train.
+    optimizer: torch.optim.Optimizer
+        The optimizer to use for the training.
+    train_loader : torch.utils.data.DataLoader
+        A DataLoader providing access to training images and labels.   
+    """
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -137,10 +135,24 @@ def train(epoch, model, optimizer, train_loader):
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.item()))
 
-#
-# A simple test procedure to measure the STN performances on MNIST.
-#
-def test(model, optimizer, test_loader):
+def test(model, test_loader):
+    """
+    A simple test procedure to measure the STN performances on MNIST.
+    
+    Parameters
+    ----------
+    model : nn.Module
+        The network to evaluate.
+    test_loader : torch.utils.data.DataLoader
+        A DataLoader providing access to test images and labels.  
+
+    Returns
+    -------
+    test_loss: float
+        The average test loss for the entire dataset.
+    accuracy: float
+        The accuracy computed on the provided dataset.
+    """
     with torch.no_grad():
         model.eval()
         test_loss = 0
@@ -156,19 +168,57 @@ def test(model, optimizer, test_loader):
             correct += pred.eq(target.view_as(pred)).sum().item()
 
         test_loss /= len(test_loader.dataset)
+        accuracy = correct / len(test_loader.dataset)
         print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'
               .format(test_loss, correct, len(test_loader.dataset),
-                      100. * correct / len(test_loader.dataset)))
+                      100. * accuracy))
+        return test_loss, accuracy
 
-######################################################################
-# Visualizing the STN results
-# ---------------------------
-#
-# Now, we will inspect the results of our learned visual attention
-# mechanism.
-#
-# We define a small helper function in order to visualize the
-# transformations while training.
+def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None):
+    """
+    Train a model num_runs times on MNIST and compute the mean accuracy on
+    the test set.
+    
+    Parameters
+    ----------
+    train_loader : torch.utils.data.DataLoader
+        A DataLoader providing access to training images and labels.  
+    test_loader : torch.utils.data.DataLoader
+        A DataLoader providing access to test images and labels.
+    num_runs: int
+        How many models should be trained. A higher numbers should
+        provide more accurate statistics.
+    epochs: int
+        Number of epochs for each trained model.
+    use_coord: str
+        Whether the model should use CoordConv. See Net.__init__.
+
+    Returns
+    -------
+    models: nn.Module
+        The list of trained models.
+    acc_list: float
+        The list of accuracies for each trained model (using last epoch's weights).
+    """
+    for i in range(num_runs):
+        print("Starting training run {}/{} (use_coord={})".format(i + 1, num_runs, use_coord))
+    
+        model = Net(use_coord=use_coord).to(device)
+        optimizer = optim.SGD(model.parameters(), lr=0.01)
+
+        # Note: we would normally want to have a validation set
+        # in order to select the best training hyperparameters
+        # (e.g. optimizer, number of epochs, etc.)
+        # but we won't bother for this toy project
+        
+        for epoch in range(1, epochs + 1):
+            train(epoch, model, optimizer, train_loader)
+            _, accuracy = test(model, test_loader)
+        acc_list.append(accuracy) # save last epoch accuracy
+        models.append(model)
+    
+    return models, acc_list
+
 def convert_image_np(inp):
     """Convert a Tensor to numpy image."""
     inp = inp.numpy().transpose((1, 2, 0))
@@ -182,6 +232,18 @@ def convert_image_np(inp):
 # after the training, we visualize a batch of input images and
 # the corresponding transformed batch using STN.
 def visualize_stn(model, test_loader):
+    """
+    Visualize the output of the STN layer using a batch of images.
+    The function will select the next batch of images from the
+    provided DataLoader.
+    
+    Parameters
+    ----------
+    model : nn.Module
+        The network to evaluate.
+    test_loader : torch.utils.data.DataLoader
+        A DataLoader providing access to test images and labels.
+    """
     with torch.no_grad():
         # Get a batch of training data
         data = next(iter(test_loader))[0].to(device)
@@ -203,44 +265,54 @@ def visualize_stn(model, test_loader):
         axarr[1].imshow(out_grid)
         axarr[1].set_title('Transformed Images')
 
+# Reproducible DataLoader worker initialization function
+# see https://pytorch.org/docs/stable/notes/randomness.html
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+
 def main():
     plt.ion()   # interactive mode
 
-    ######################################################################
-    # Loading the data
-    # ----------------
-    #
-    # In this post we experiment with the classic MNIST dataset. Using a
-    # standard convolutional network augmented with a spatial transformer
-    # network.
+    # We experiment with the classic MNIST dataset. Using a standard
+    # convolutional network augmented with a spatial transformer network.
     opener = urllib.request.build_opener()
     opener.addheaders = [('User-agent', 'Mozilla/5.0')]
     urllib.request.install_opener(opener)
-
+    
+    g = torch.Generator()
+    g.manual_seed(0)
+    
     # Training dataset
     train_loader = torch.utils.data.DataLoader(
         datasets.MNIST(root='.', train=True, download=True,
                        transform=transforms.Compose([
                            transforms.ToTensor(),
                            transforms.Normalize((0.1307,), (0.3081,))
-                       ])), batch_size=64, shuffle=True, num_workers=4)
+                       ])),
+        batch_size=64, shuffle=True, num_workers=4,
+        worker_init_fn=seed_worker, generator=g)
     
     # Test dataset
+    # Note that the test function always looks at the entire dataset,
+    # so shuffling seed should be irrelevant for the performance evaluation.
+    # We use it instead in order to extract the same sample images for
+    # STN visualization.
     test_loader = torch.utils.data.DataLoader(
         datasets.MNIST(root='.', train=False, transform=transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,))
-        ])), batch_size=64, shuffle=True, num_workers=4)
+        ])),
+        batch_size=64, shuffle=True, num_workers=4,
+        worker_init_fn=seed_worker, generator=g)
 
-    model = Net().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=0.01)
-
-    for epoch in range(1, 20 + 1):
-        train(epoch, model, optimizer, train_loader)
-        test(model, optimizer, test_loader)
-
+    models, acc_list = train_test(train_loader, test_loader, epochs=1)
+    print("Average accuracy over 5 runs: {:.4f} +/- {:.4f}".format(np.mean(acc_list), np.std(acc_list)))
+    
     # Visualize the STN transformation on some input batch
-    visualize_stn(model, test_loader)
+    # Use the first trained model
+    visualize_stn(models[0], test_loader)
 
     plt.ioff()
     plt.show()
