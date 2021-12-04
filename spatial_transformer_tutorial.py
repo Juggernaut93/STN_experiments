@@ -31,7 +31,7 @@ torch.backends.cudnn.benchmark = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Net(nn.Module):
-    def __init__(self, use_coord=None):
+    def __init__(self, use_coord=None, use_radius=False):
         """
         Parameters
         ----------
@@ -39,6 +39,10 @@ class Net(nn.Module):
             Whether CoordConv should replace Conv (default is None).
             'stn' indicates that only the STN module should use CoordConv.
             'all' indicates that all Conv modules should be replaced.
+        use_radius: bool
+            Whether CoordConv should add a third channel with radial
+            information (default is False).
+            Ignored if use_coord is None.
         
         Raises
         ------
@@ -50,8 +54,12 @@ class Net(nn.Module):
         if use_coord not in (None, 'stn', 'all'):
             raise ValueError("use_coord must be either None, 'stn' or 'all'")
         
-        main_conv = CoordConv if use_coord == 'all' else nn.Conv2d # use CoordConv outside of STN only if use_coord is 'all'
-        stn_conv = CoordConv if use_coord is not None else nn.Conv2d # use CoordConv in STN if use_coord is 'stn' or 'all'
+        # CoordConv initializer proxy function, so we can easily select the correct module
+        # and use it throughout the network without bothering
+        cconv = lambda *vargs, **kwargs: CoordConv(*vargs, **kwargs, with_r=use_radius)
+        # selecting the correct layer based on use_coord argument
+        main_conv = cconv if use_coord == 'all' else nn.Conv2d # use CoordConv outside of STN only if use_coord is 'all'
+        stn_conv = cconv if use_coord is not None else nn.Conv2d # use CoordConv in STN if use_coord is 'stn' or 'all'
         
         self.conv1 = main_conv(1, 10, kernel_size=5)
         self.conv2 = main_conv(10, 20, kernel_size=5)
@@ -174,7 +182,7 @@ def test(model, test_loader):
                       100. * accuracy))
         return test_loss, accuracy
 
-def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None):
+def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None, use_radius=False):
     """
     Train a model num_runs times on MNIST and compute the mean accuracy on
     the test set.
@@ -192,6 +200,10 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None)
         Number of epochs for each trained model.
     use_coord: str
         Whether the model should use CoordConv. See Net.__init__.
+    use_radius: bool
+        Whether CoordConv should add a third channel with radial
+        information (default is False).
+        Ignored if use_coord is None.
 
     Returns
     -------
@@ -203,9 +215,9 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None)
     models = []
     acc_list = []
     for i in range(num_runs):
-        print("Starting training run {}/{} (use_coord={})".format(i + 1, num_runs, use_coord))
+        print("Starting training run {}/{} (use_coord={}, use_radius={})".format(i + 1, num_runs, use_coord, use_radius))
     
-        model = Net(use_coord=use_coord).to(device)
+        model = Net(use_coord=use_coord, use_radius=use_radius).to(device)
         optimizer = optim.SGD(model.parameters(), lr=0.01)
 
         # Note: we would normally want to have a validation set
@@ -217,6 +229,8 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None)
             _, accuracy = test(model, test_loader)
         acc_list.append(accuracy) # save last epoch accuracy
         models.append(model)
+        
+    print("Average accuracy over 5 runs: {:.4f} +/- {:.4f}".format(np.mean(acc_list), np.std(acc_list)))
     
     return models, acc_list
 
@@ -308,12 +322,35 @@ def main():
         batch_size=64, shuffle=True, num_workers=4,
         worker_init_fn=seed_worker, generator=g)
 
-    models, acc_list = train_test(train_loader, test_loader, epochs=1)
-    print("Average accuracy over 5 runs: {:.4f} +/- {:.4f}".format(np.mean(acc_list), np.std(acc_list)))
+    # train and evaluate:
+    # 1 - baseline model
+    # 2 - CoordConv in the STN module
+    # 3 - CoordConv with radial coordinates in the STN module
+    # 4 - CoordConv in the entire network
+    # 5 - CoordConv with radial coordinates in the entire network
+    # NOTE: I reduced the number of epochs in order to speed up the training,
+    # since my GPU is not the best
+    # A higher num_runs would also be useful in order to have a more reliable
+    # average.
+    models = {}
+    accuracies = {}
+    models['baseline'],   accuracies['baseline']   = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord=None, use_radius=False)
+    models['stn'],        accuracies['stn']        = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='stn', use_radius=False)
+    models['stn_radius'], accuracies['stn_radius'] = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='stn', use_radius=True)
+    models['all'],        accuracies['all']        = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='all', use_radius=False)
+    models['all_radius'], accuracies['all_radius'] = train_test(train_loader, test_loader, num_runs=3, epochs=10, use_coord='all', use_radius=True)
     
     # Visualize the STN transformation on some input batch
     # Use the first trained model
-    visualize_stn(models[0], test_loader)
+    for model_type, models in models.items():
+        print("Visualizing transformation for a {} model.".format(model_type))
+        visualize_stn(models[0], test_loader)
+    
+    all_mean_accuracies = []
+    for model_type, acc in accuracies.items():
+        mean_acc = np.mean(acc)
+        all_mean_accuracies.append(mean_acc)
+        print("Average accuracy for model {}: {}".format(model_type, mean_acc))
 
     plt.ioff()
     plt.show()
