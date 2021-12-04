@@ -343,14 +343,19 @@ def main():
     # Visualize the STN transformation on some input batch
     # Use the first trained model
     for model_type, models in models.items():
-        print("Visualizing transformation for a {} model.".format(model_type))
+        print("Visualizing transformation for one of the '{}' models.".format(model_type))
         visualize_stn(models[0], test_loader)
     
-    all_mean_accuracies = []
+    best_acc = 0
+    best_model = None
     for model_type, acc in accuracies.items():
         mean_acc = np.mean(acc)
-        all_mean_accuracies.append(mean_acc)
-        print("Average accuracy for model {}: {}".format(model_type, mean_acc))
+        if mean_acc > best_acc:
+            best_acc = mean_acc
+            best_model = model_type
+        print("Average accuracy for model {}: {:.4f}".format(model_type, mean_acc))
+    
+    print("The '{}' model obtained the best average accuracy ({:.4f}).".format(best_model, best_acc))
 
     plt.ioff()
     plt.show()
