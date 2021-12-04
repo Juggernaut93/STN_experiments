@@ -32,11 +32,11 @@ torch.backends.cudnn.benchmark = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Net(nn.Module):
-    def __init__(self, use_coord=None, use_radius=False):
+    def __init__(self, use_coord=None, use_radius=False, propagate_theta=False):
         """
         Parameters
         ----------
-        use_coord : str, optional
+        use_coord: str, optional
             Whether CoordConv should replace Conv (default is None).
             'stn' indicates that only the STN module should use CoordConv.
             'all' indicates that all Conv modules should be replaced.
@@ -62,11 +62,17 @@ class Net(nn.Module):
         main_conv = cconv if use_coord == 'all' else nn.Conv2d # use CoordConv outside of STN only if use_coord is 'all'
         stn_conv = cconv if use_coord is not None else nn.Conv2d # use CoordConv in STN if use_coord is 'stn' or 'all'
         
-        self.conv1 = main_conv(1, 10, kernel_size=5)
-        self.conv2 = main_conv(10, 20, kernel_size=5)
+        self.propagate_theta = propagate_theta
+        # if we propagate theta as 6 additional channels
+        # each convolution will have 6 more input filters
+        additional_channels = 6 if propagate_theta else 0
+        self.conv1 = main_conv(1 + additional_channels, 10, kernel_size=5)
+        self.conv2 = main_conv(10 + additional_channels, 20, kernel_size=5)
         
         self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(320, 50)
+        # if we propagate theta as a 6-d vector to the fc1 input,
+        # we need to add 6 to its input dimension
+        self.fc1 = nn.Linear(320 + additional_channels, 50)
         self.fc2 = nn.Linear(50, 10)
 
         # Spatial transformer localization-network
@@ -100,16 +106,45 @@ class Net(nn.Module):
         grid = F.affine_grid(theta, x.size(), align_corners=False)
         x = F.grid_sample(x, grid, align_corners=False)
 
-        return x
+        return x, theta
 
+    # concatenate 6 channels, each with a different constant value
+    # each channel provides information about the estimated theta parameters
+    # this function only works for convolutional filters
+    # no effect if self.propagate_theta is False
+    def concat_theta_conv(self, x, theta):
+        if self.propagate_theta:
+            batch_size, _, x_dim, y_dim = x.size()
+            theta_ch = torch.ones(batch_size, 6, x_dim, y_dim).to(device) # size Nx6xWxH
+            theta = theta.view(-1, 6) # size Nx6
+            # size Nx6xWxH, permute necessary for correct broadcasting
+            theta_ch = (theta_ch.permute((2,3,0,1)) * theta).permute((2,3,0,1))
+            x = torch.cat([x,
+                           theta_ch.type_as(x)],
+                           dim=1)
+        return x
+    
+    # concatenate the 6 theta values to the FC input
+    # no effect if self.propagate_theta is False
+    def concat_theta_fc(self, x, theta):
+        if self.propagate_theta:
+            theta = theta.view(-1, 6) # size Nx6
+            x = torch.cat([x,
+                           theta.type_as(x)],
+                           dim=1)
+        return x
+    
     def forward(self, x):
         # transform the input
-        x = self.stn(x)
+        x, theta = self.stn(x)
+        x = self.concat_theta_conv(x, theta)
 
         # Perform the usual forward pass
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = self.concat_theta_conv(x, theta)
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
         x = x.view(-1, 320)
+        x = self.concat_theta_fc(x, theta)
         x = F.relu(self.fc1(x))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
@@ -123,11 +158,11 @@ def train(epoch, model, optimizer, train_loader):
     ----------
     epoch: int
         The number of the current epoch.
-    model : nn.Module
+    model: nn.Module
         The network to train.
     optimizer: torch.optim.Optimizer
         The optimizer to use for the training.
-    train_loader : torch.utils.data.DataLoader
+    train_loader: torch.utils.data.DataLoader
         A DataLoader providing access to training images and labels.   
     """
     model.train()
@@ -150,9 +185,9 @@ def test(model, test_loader):
     
     Parameters
     ----------
-    model : nn.Module
+    model: nn.Module
         The network to evaluate.
-    test_loader : torch.utils.data.DataLoader
+    test_loader: torch.utils.data.DataLoader
         A DataLoader providing access to test images and labels.  
 
     Returns
@@ -183,16 +218,16 @@ def test(model, test_loader):
                       100. * accuracy))
         return test_loss, accuracy
 
-def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None, use_radius=False):
+def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None, use_radius=False, propagate_theta=False):
     """
     Train a model num_runs times on MNIST and compute the mean accuracy on
     the test set.
     
     Parameters
     ----------
-    train_loader : torch.utils.data.DataLoader
+    train_loader: torch.utils.data.DataLoader
         A DataLoader providing access to training images and labels.  
-    test_loader : torch.utils.data.DataLoader
+    test_loader: torch.utils.data.DataLoader
         A DataLoader providing access to test images and labels.
     num_runs: int
         How many models should be trained. A higher numbers should
@@ -205,6 +240,10 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None,
         Whether CoordConv should add a third channel with radial
         information (default is False).
         Ignored if use_coord is None.
+    propagate_theta: bool
+        Whether the estimated theta should be propagated to the
+        conv and FC layers of the network as concatenated channels
+        (similar to how CoordConv works).
 
     Returns
     -------
@@ -216,9 +255,9 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None,
     models = []
     acc_list = []
     for i in range(num_runs):
-        print("Starting training run {}/{} (use_coord={}, use_radius={})".format(i + 1, num_runs, use_coord, use_radius))
+        print("Starting training run {}/{} (use_coord={}, use_radius={}, propagate_theta={})".format(i + 1, num_runs, use_coord, use_radius, propagate_theta))
     
-        model = Net(use_coord=use_coord, use_radius=use_radius).to(device)
+        model = Net(use_coord=use_coord, use_radius=use_radius, propagate_theta=propagate_theta).to(device)
         optimizer = optim.SGD(model.parameters(), lr=0.01)
 
         # Note: we would normally want to have a validation set
@@ -248,7 +287,7 @@ def convert_image_np(inp):
 # We want to visualize the output of the spatial transformers layer
 # after the training, we visualize a batch of input images and
 # the corresponding transformed batch using STN.
-def visualize_stn(models, model_names, test_loader):
+def visualize_stn(models, model_names, test_loader, fn_prefix=""):
     """
     Visualize the output of the STN layer using a batch of images.
     The function will select the next batch of images from the
@@ -256,12 +295,14 @@ def visualize_stn(models, model_names, test_loader):
     
     Parameters
     ----------
-    models : list of nn.Module
+    models: list of nn.Module
         The networks to evaluate.
     model_names: str
         Name of the models to use as graph titles.
-    test_loader : torch.utils.data.DataLoader
+    test_loader: torch.utils.data.DataLoader
         A DataLoader providing access to test images and labels.
+    fn_prefix: str
+        Optional prefix for the output figure filenames.
     """
     # Get a batch of training data
     # use the same images for all the models
@@ -270,7 +311,7 @@ def visualize_stn(models, model_names, test_loader):
     
     for model, model_name in zip(models, model_names):
         with torch.no_grad():
-            transformed_input_tensor = model.stn(data).cpu()
+            transformed_input_tensor = model.stn(data)[0].cpu()
 
             in_grid = convert_image_np(
                 torchvision.utils.make_grid(input_tensor))
@@ -285,6 +326,7 @@ def visualize_stn(models, model_names, test_loader):
 
             axarr[1].imshow(out_grid)
             axarr[1].set_title('Transformed Images (model {})'.format(model_name))
+            plt.savefig('img/{}{}.png'.format(fn_prefix, model_name))
 
 # Reproducible DataLoader worker initialization function
 # see https://pytorch.org/docs/stable/notes/randomness.html
@@ -350,6 +392,7 @@ def main():
     # 3 - CoordConv with radial coordinates in the STN module
     # 4 - CoordConv in the entire network
     # 5 - CoordConv with radial coordinates in the entire network
+    # 6 - Like 5, but we add theta estimation to the input of conv layers and FC1
     # NOTE: I reduced the number of epochs in order to speed up the training,
     # since my GPU is not the best
     # A higher num_runs would also be useful in order to have a more reliable
@@ -361,11 +404,15 @@ def main():
     models['stncoord_radius'], accuracies['stncoord_radius'] = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='stn', use_radius=True)
     models['allcoord'],        accuracies['allcoord']        = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='all', use_radius=False)
     models['allcoord_radius'], accuracies['allcoord_radius'] = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='all', use_radius=True)
+    models['coord_r_theta'],   accuracies['coord_r_theta']   = train_test(train_loader, test_loader, num_runs=args.nruns, epochs=args.epochs, use_coord='all', use_radius=True, propagate_theta=True)
     
     # Visualize the STN transformation on some input batch
     # Use the first trained model for each model type
     print("Visualizing transformations.")
-    visualize_stn([mlist[0] for mlist in models.values()], [mtype for mtype in models.keys()], test_loader)
+    visualize_stn([mlist[0] for mlist in models.values()],
+                  [mtype for mtype in models.keys()],
+                  test_loader,
+                  'distort_' if args.distort else 'nodistort_')
     
     best_acc = 0
     best_model = None
