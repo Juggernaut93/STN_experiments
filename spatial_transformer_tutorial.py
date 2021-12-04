@@ -200,6 +200,8 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None)
     acc_list: float
         The list of accuracies for each trained model (using last epoch's weights).
     """
+    models = []
+    acc_list = []
     for i in range(num_runs):
         print("Starting training run {}/{} (use_coord={})".format(i + 1, num_runs, use_coord))
     
@@ -210,7 +212,6 @@ def train_test(train_loader, test_loader, num_runs=5, epochs=20, use_coord=None)
         # in order to select the best training hyperparameters
         # (e.g. optimizer, number of epochs, etc.)
         # but we won't bother for this toy project
-        
         for epoch in range(1, epochs + 1):
             train(epoch, model, optimizer, train_loader)
             _, accuracy = test(model, test_loader)
