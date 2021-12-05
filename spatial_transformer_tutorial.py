@@ -1,7 +1,8 @@
-# -*- coding: utf-8 -*-
 """
 Based on the "Spatial Transformer Networks Tutorial"
 by Ghassen HAMROUNI <https://github.com/GHamrouni>
+
+Modified by Gioele Ciaparrone.
 """
 
 from __future__ import print_function
@@ -25,7 +26,7 @@ np.random.seed(0)
 torch.backends.cudnn.benchmark = False
 # We can't enable this option because the grid_sampler_2d_backward_cuda
 # function, used to propagate the gradients for the grid_sample
-# operation, does not have a deterministic implementation in pyTorch
+# operation, does not have a deterministic implementation in pyTorch.
 #torch.use_deterministic_algorithms(True)
 
 # Device selection, prefer GPU
@@ -98,6 +99,24 @@ class Net(nn.Module):
 
     # Spatial transformer network forward function
     def stn(self, x):
+        """
+        Spatial Transformer Network forward function.
+        
+        Parameters
+        ----------
+        x: torch.Tensor
+            The input tensor.
+        
+        Returns
+        -------
+        x: torch.Tensor
+            An affine transformation of the input tensor,
+            based on the estimated theta matrix. Same size
+            as the input.
+        theta: torch.Tensor
+            The estimated parameter matrix for the 2D affine
+            transformation of the input tensor. Size is Nx2x3.
+        """
         xs = self.localization(x)
         xs = xs.view(-1, 10 * 3 * 3)
         theta = self.fc_loc(xs)
@@ -113,6 +132,24 @@ class Net(nn.Module):
     # this function only works for convolutional filters
     # no effect if self.propagate_theta is False
     def concat_theta_conv(self, x, theta):
+        """
+        Concatenate 6 channels to a 4D tensor (N, C, W, H) along the C axis.
+        Each channel has a different constant value representing one of the
+        6 estimated affine transformation parameters obtained by the STN module.
+        The function has no effect if self.propagate_theta is False.
+        
+        Parameters
+        ----------
+        x: torch.Tensor
+            The input tensor, it must be 4-dimensional, with shape (N, C, W, H).
+        theta: torch.Tensor
+            The 2x3 matrix representing a set of affine transformation parameters.
+        
+        Returns
+        -------
+        x: torch.Tensor
+            A tensor of size (N, C+6, W, H).
+        """
         if self.propagate_theta:
             batch_size, _, x_dim, y_dim = x.size()
             theta_ch = torch.ones(batch_size, 6, x_dim, y_dim).to(device) # size Nx6xWxH
@@ -127,6 +164,22 @@ class Net(nn.Module):
     # concatenate the 6 theta values to the FC input
     # no effect if self.propagate_theta is False
     def concat_theta_fc(self, x, theta):
+        """
+        Concatenate the 6 affine transformation parameters to a tensor
+        of shape (N, C), along the C dimension.
+        
+        Parameters
+        ----------
+        x: torch.Tensor
+            The input tensor, it must be 2-dimensional, with shape (N, C).
+        theta: torch.Tensor
+            The 2x3 matrix representing a set of affine transformation parameters.
+        
+        Returns
+        -------
+        x: torch.Tensor
+            A tensor of size (N, C+6).
+        """
         if self.propagate_theta:
             theta = theta.view(-1, 6) # size Nx6
             x = torch.cat([x,
@@ -141,10 +194,10 @@ class Net(nn.Module):
 
         # Perform the usual forward pass
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = self.concat_theta_conv(x, theta)
+        x = self.concat_theta_conv(x, theta) # optional theta propagation
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
         x = x.view(-1, 320)
-        x = self.concat_theta_fc(x, theta)
+        x = self.concat_theta_fc(x, theta) # optional theta propagation
         x = F.relu(self.fc1(x))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
