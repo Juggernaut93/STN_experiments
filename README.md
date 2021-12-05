@@ -34,6 +34,17 @@ The 6 trained models are the following:
 
 Results are comparable for all the 6 models, although a longer (and more refined) training procedure would be necessary in order to draw reliable conclusions.
 
+## Transformation examples
+The [img/] folder contains examples of transformations operated by an instance of each of the 6 trained models. The name of each file describes the model and dataset used.
+
+`distort_`/`nodistort_` prefixes indicate if the model was trained/tested on the distorted or the original version of MNIST.
+
+`baseline` indicates model #1.
+
+`stncoord`, `stncoord_radius`, `allcoord`, `allcoord_radius` indicate models #2, #3, #4 and #5, respectively.
+
+`coord_r_theta` indicates model #6.
+
 ## Script usage
 `python spatial_transformer_experiments.py [--distort] [-nruns 5] [-epochs 20]`
 
