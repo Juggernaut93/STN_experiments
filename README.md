@@ -14,12 +14,12 @@ Note that the script has in place partial measures to ensure the repeatability o
 
 ## Models and results
 The 6 trained models are the following:
-1. Baseline: the original simple STN-based CNN from the cited PyTorch tutorial.
-2. CoordConv_STN: Conv layers in the STN module were replaced by CoordConv layers ([https://arxiv.org/abs/1807.03247](paper)). [https://github.com/mkocabas/CoordConv-pytorch](This implementation) was used.
-3. CoordConv_R_STN: same as #2, but the additional channel with radial coordinates was added. Note that I fixed the radial channel computation by correctly re-centering the origin.
-4. CoordConv_all: Conv layers were replaced by CoordConv layers in the entire network.
-5. CoordConv_R_all: same as #4, with radial coordinates enabled.
-6. CoordConv_R_all_thetaprop: same as #5, but I expanded the concept of CoordConv by adding 6 additional channels, each representing the value of the 6 affine transformation parameters computed by the STN module. The additional information was provided to the 2 main convolutional layers and the first FC layer of the network.
+1. *Baseline*: the original simple STN-based CNN from the cited PyTorch tutorial.
+2. *CoordConv_STN*: Conv layers in the STN module were replaced by CoordConv layers ([https://arxiv.org/abs/1807.03247](paper)). [https://github.com/mkocabas/CoordConv-pytorch](This implementation) was used.
+3. *CoordConv_R_STN*: same as #2, but the additional channel with radial coordinates was added. Note that I fixed the radial channel computation by correctly re-centering the origin.
+4. *CoordConv_all*: Conv layers were replaced by CoordConv layers in the entire network.
+5. *CoordConv_R_all*: same as #4, with radial coordinates enabled.
+6. *CoordConv_R_all_thetaprop*: same as #5, but I expanded the concept of CoordConv by adding 6 additional channels, each representing the value of the 6 affine transformation parameters computed by the STN module. The additional information was provided to the 2 main convolutional layers and the first FC layer of the network.
 
 | Model | Accuracy over 5 runs (mean ± std) |
 | -------------------------- | ------------- |
@@ -36,6 +36,7 @@ Results are comparable for all the 6 models, although a longer (and more refined
 
 ## Script usage
 `python spatial_transformer_experiments.py [--distort] [-nruns 5] [-epochs 20]`
+
 Trains and evaluates the 6 models on MNIST.
 
 `--distort` tells the script to use the distorted MNIST images.
