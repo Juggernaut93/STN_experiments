@@ -1,4 +1,4 @@
-# STN_experiments
+# STN experiments
 This repository containes some toy experiments on a simple Spatial Transformer Network (STN) CNN.
 
 Code is partially based on [this PyTorch tutorial](https://pytorch.org/tutorials/intermediate/spatial_transformer_tutorial.html) by Ghassen Hamrouni.
@@ -15,7 +15,7 @@ Note that the script has in place partial measures to ensure the repeatability o
 ## Models and results
 The 6 trained models are the following:
 1. *Baseline*: the original simple STN-based CNN from the cited PyTorch tutorial.
-2. *CoordConv_STN*: Conv layers in the STN module were replaced by CoordConv layers ([https://arxiv.org/abs/1807.03247](paper)). [https://github.com/mkocabas/CoordConv-pytorch](This implementation) was used.
+2. *CoordConv_STN*: Conv layers in the STN module were replaced by CoordConv layers ([paper](https://arxiv.org/abs/1807.03247)). [This implementation](https://github.com/mkocabas/CoordConv-pytorch) was used.
 3. *CoordConv_R_STN*: same as #2, but the additional channel with radial coordinates was added. Note that I fixed the radial channel computation by correctly re-centering the origin.
 4. *CoordConv_all*: Conv layers were replaced by CoordConv layers in the entire network.
 5. *CoordConv_R_all*: same as #4, with radial coordinates enabled.
@@ -35,7 +35,7 @@ The 6 trained models are the following:
 Results are comparable for all the 6 models, although a longer (and more refined) training procedure would be necessary in order to draw reliable conclusions.
 
 ## Transformation examples
-The [img/] folder contains examples of transformations operated by an instance of each of the 6 trained models. The name of each file describes the model and dataset used.
+The [img](img) folder contains examples of transformations operated by an instance of each of the 6 trained models. The name of each file describes the model and dataset used.
 
 `distort_`/`nodistort_` prefixes indicate if the model was trained/tested on the distorted or the original version of MNIST.
 
