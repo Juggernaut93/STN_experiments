@@ -21,14 +21,14 @@ The 6 trained models are the following:
 5. CoordConv_R_all: same as #4, with radial coordinates enabled.
 6. CoordConv_R_all_thetaprop: same as #5, but I expanded the concept of CoordConv by adding 6 additional channels, each representing the value of the 6 affine transformation parameters computed by the STN module. The additional information was provided to the 2 main convolutional layers and the first FC layer of the network.
 
-| Model | Mean Accuracy over 5 runs |
+| Model | Accuracy over 5 runs (mean ± std) |
 | -------------------------- | ------------- |
-| Baseline                   | 0.9142 +/- 0.0762* |
-| CoordConv_STN              | 0.9548 +/- 0.0116 |
-| CoordConv_R_STN            | 0.9494 +/- 0.0148 |
-| CoordConv_all              | 0.9563 +/- 0.0026 |
-| CoordConv_R_all            | 0.9413 +/- 0.0154 |
-| CoordConv_R_all_thetaprop  | 0.9562 +/- 0.0053 |
+| Baseline                   | 0.9142 ± 0.0762* |
+| CoordConv_STN              | 0.9548 ± 0.0116 |
+| CoordConv_R_STN            | 0.9494 ± 0.0148 |
+| CoordConv_all              | 0.9563 ± 0.0026 |
+| CoordConv_R_all            | 0.9413 ± 0.0154 |
+| CoordConv_R_all_thetaprop  | 0.9562 ± 0.0053 |
 
 \*Since no validation set was employed for hyperparameter selection (training duration, learning rate, optimizer, etc.), the accuracy of a model was just selected as the accuracy obtained after the 20th epoch of training. One of the 5 runs for the baseline model happened to have a sudden decay in accuracy from ~95% to ~76% at exactly the 20th epoch. Realistically, the lower accuracy of the baseline model is due to a statistical fluke, since the other models also experienced some accuracy dips during training, but were lucky enough not to have them happen on the 20th epoch.
 
